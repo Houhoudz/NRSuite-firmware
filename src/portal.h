@@ -22,7 +22,6 @@ public:
     size_t getExpectedSize() const { return _htmlExpected; }
     bool resetHtml(size_t expectedSize = 0);
 
-
 private:
     AsyncWebServer* _server = nullptr;
     DNSServer* _dnsServer = nullptr;
@@ -37,14 +36,12 @@ private:
     size_t   _htmlExpected = 0;
     int      _loginAttempts = 0;
     TaskHandle_t _deauthTaskHandle = nullptr;
-    static String _servedSnapshot;
+
     static void deauthTaskFn(void* pvParameters);
 
     void setupDNSSpoof();
     void setupRoutes();
-    String loadingPlaceholder() const;
-    String noticePage() const;
-
+    const char* loadingPlaceholder() const; // رجعناها const char* باش نوكلو الرام
 };
 
 extern PortalManager portal;
