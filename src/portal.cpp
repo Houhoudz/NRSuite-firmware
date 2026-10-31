@@ -78,13 +78,13 @@ void PortalManager::setupRoutes() {
         request->send(200, "text/html", "<html><body><h2>Connecting...</h2></body></html>");
     });
 
-    // 4. مسارات وهمية لطرد طلبات الفحص (لتوفير الرام)
-    _server->on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(204); });
-    _server->on("/gen_204", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(204); });
-    _server->on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"); });
-    _server->on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(200, "text/plain", "Microsoft Connect Test"); });
-    _server->on("/ncsi.txt", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(200, "text/plain", "Microsoft NCSI"); });
-    _server->on("/library/test/success.html", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"); });
+    // 4. التعديل الجديد: هاذ المسارات كتوجه الهاتف للصفحة الرئيسية بدل ما تقولو كاين إنترنت
+    _server->on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *request){ request->redirect("http://192.168.4.1/"); });
+    _server->on("/gen_204", HTTP_GET, [](AsyncWebServerRequest *request){ request->redirect("http://192.168.4.1/"); });
+    _server->on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *request){ request->redirect("http://192.168.4.1/"); });
+    _server->on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest *request){ request->redirect("http://192.168.4.1/"); });
+    _server->on("/ncsi.txt", HTTP_GET, [](AsyncWebServerRequest *request){ request->redirect("http://192.168.4.1/"); });
+    _server->on("/library/test/success.html", HTTP_GET, [](AsyncWebServerRequest *request){ request->redirect("http://192.168.4.1/"); });
 
     // 5. أي طلب آخر
     _server->onNotFound([](AsyncWebServerRequest* request) {
